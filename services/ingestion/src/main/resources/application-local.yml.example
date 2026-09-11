@@ -1,0 +1,36 @@
+# Copy to application-local.yml and edit. That file is gitignored.
+# ./mvnw spring-boot:run activates the local profile automatically.
+# Start local Kafka and MinIO with: docker compose up -d
+# Postgres is expected on localhost (not in Docker).
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/streamvault
+    username: streamvault
+    password: streamvault
+  r2dbc:
+    url: r2dbc:postgresql://localhost:5432/streamvault
+    username: streamvault
+    password: streamvault
+  flyway:
+    url: jdbc:postgresql://localhost:5432/streamvault
+    user: streamvault
+    password: streamvault
+
+aws:
+  region: us-east-1
+  s3:
+    bucket: streamvault-videos
+    endpoint: http://localhost:9000
+    path-style-enabled: true
+    access-key: streamvault
+    secret-key: streamvault
+
+kafka:
+  bootstrap-servers: localhost:9092
+  topic:
+    video-uploaded: video.uploaded
+  security:
+    protocol:
+    sasl-mechanism:
+    sasl-jaas-config:

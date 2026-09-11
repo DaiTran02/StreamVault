@@ -1,0 +1,48 @@
+spring:
+  application:
+    name: ingestion
+  datasource:
+    url: ${SPRING_FLYWAY_URL:jdbc:postgresql://localhost:5432/streamvault}
+    username: ${SPRING_DATASOURCE_USERNAME:streamvault}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+  r2dbc:
+    url: ${SPRING_R2DBC_URL:r2dbc:postgresql://localhost:5432/streamvault}
+    username: ${SPRING_DATASOURCE_USERNAME:streamvault}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+  flyway:
+    enabled: true
+    url: ${SPRING_FLYWAY_URL:${spring.datasource.url}}
+    user: ${SPRING_DATASOURCE_USERNAME:${spring.datasource.username}}
+    password: ${SPRING_DATASOURCE_PASSWORD:${spring.datasource.password:}}
+  codec:
+    max-in-memory-size: 256KB
+  webflux:
+    multipart:
+      max-in-memory-size: 256KB
+      max-disk-usage-per-part: ${INGESTION_MAX_FILE_SIZE_BYTES:5368709120}
+      max-headers-size: 16KB
+
+aws:
+  region: ${AWS_REGION:ap-southeast-3}
+  s3:
+    bucket: ${S3_BUCKET:}
+    endpoint: ${S3_ENDPOINT:}
+    path-style-enabled: ${S3_PATH_STYLE_ENABLED:false}
+    access-key: ${S3_ACCESS_KEY:}
+    secret-key: ${S3_SECRET_KEY:}
+
+kafka:
+  bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+  topic:
+    video-uploaded: ${KAFKA_TOPIC_VIDEO_UPLOADED:video.uploaded}
+  security:
+    protocol: ${KAFKA_SECURITY_PROTOCOL:}
+    sasl-mechanism: ${KAFKA_SASL_MECHANISM:}
+    sasl-jaas-config: ${KAFKA_SASL_JAAS_CONFIG:}
+
+ingestion:
+  max-file-size-bytes: ${INGESTION_MAX_FILE_SIZE_BYTES:5368709120}
+  allowed-content-types:
+    - video/mp4
+    - video/quicktime
+    - video/webm

@@ -1,0 +1,11 @@
+ingestion:
+  allowed-content-types:
+    - video/mp4
+    - video/quicktime
+    - video/webm
+  max-file-size-bytes: 1048576
+
+aws:
+  region: us-east-1
+  s3:
+    bucket: test-bucket
