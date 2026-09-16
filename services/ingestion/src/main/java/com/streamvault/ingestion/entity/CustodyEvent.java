@@ -18,43 +18,31 @@ import lombok.NoArgsConstructor;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@Table("videos")
-public class Video implements Persistable<UUID> {
+@Table("custody_events")
+public class CustodyEvent implements Persistable<UUID> {
 
 	@Id
 	private UUID id;
 
-	@Column("original_filename")
-	private String originalFilename;
-
-	@Column("content_type")
-	private String contentType;
-
-	@Column("size_bytes")
-	private long sizeBytes;
-
-	@Column("s3_bucket")
-	private String s3Bucket;
-
-	@Column("s3_key")
-	private String s3Key;
+	@Column("video_id")
+	private UUID videoId;
 
 	@Column("user_id")
 	private UUID userId;
 
+	private String action;
+
 	@Column("content_sha256")
 	private String contentSha256;
 
-	private VideoStatus status;
+	@Column("previous_chain_hash")
+	private String previousChainHash;
 
-	@Column("error_message")
-	private String errorMessage;
+	@Column("chain_hash")
+	private String chainHash;
 
 	@Column("created_at")
 	private Instant createdAt;
-
-	@Column("updated_at")
-	private Instant updatedAt;
 
 	@Transient
 	@Builder.Default

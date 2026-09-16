@@ -25,16 +25,19 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.multipart.FilePart;
 
+import com.streamvault.ingestion.entity.CustodyEvent;
 import com.streamvault.ingestion.entity.Detection;
 import com.streamvault.ingestion.entity.Video;
 import com.streamvault.ingestion.entity.VideoStatus;
 import com.streamvault.ingestion.exception.InvalidVideoException;
+import com.streamvault.ingestion.exception.VideoAccessDeniedException;
 import com.streamvault.ingestion.exception.VideoNotFoundException;
 import com.streamvault.ingestion.kafka.VideoUploadedEvent;
 import com.streamvault.ingestion.kafka.VideoUploadedPublisher;
 import com.streamvault.ingestion.repository.DetectionRepository;
 import com.streamvault.ingestion.repository.VideoRepository;
 import com.streamvault.ingestion.s3.S3VideoStorage;
+import com.streamvault.ingestion.s3.StoredObject;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -42,6 +45,8 @@ import reactor.test.StepVerifier;
 
 @ExtendWith(MockitoExtension.class)
 class VideoServiceTest {
+
+	private static final UUID USER_ID = UUID.fromString("22222222-2222-2222-2222-222222222222");
 
 	@Mock
 	private VideoUploadValidator validator;
@@ -61,22 +66,30 @@ class VideoServiceTest {
 	@Mock
 	private IngestionMaxSizeGuard maxSizeGuard;
 
+	@Mock
+	private ChainOfCustodyService chainOfCustody;
+
 	@InjectMocks
 	private VideoService videoService;
 
 	@Test
-	void uploadStoresMetadataAndPublishesEvent() {
+	void uploadStoresMetadataPublishesEventAndRecordsCustody() {
 		FilePart file = file("../../my clip.mp4", MediaType.valueOf("video/mp4"));
 		when(s3VideoStorage.bucket()).thenReturn("test-bucket");
-		when(s3VideoStorage.put(anyString(), eq("video/mp4"), any())).thenReturn(Mono.just(512L));
+		when(s3VideoStorage.put(anyString(), eq("video/mp4"), any()))
+				.thenReturn(Mono.just(new StoredObject(512L, "ab".repeat(32))));
 		when(videoRepository.save(any(Video.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+		when(chainOfCustody.record(any(), eq(USER_ID), eq(ChainOfCustodyService.ACTION_INGEST), anyString()))
+				.thenReturn(Mono.just(CustodyEvent.builder().build()));
 		when(publisher.publish(any())).thenReturn(Mono.empty());
 
-		StepVerifier.create(videoService.upload(file))
+		StepVerifier.create(videoService.upload(file, USER_ID))
 				.assertNext(saved -> {
 					assertEquals("../../my clip.mp4", saved.getOriginalFilename());
 					assertEquals("video/mp4", saved.getContentType());
 					assertEquals(512L, saved.getSizeBytes());
+					assertEquals("ab".repeat(32), saved.getContentSha256());
+					assertEquals(USER_ID, saved.getUserId());
 					assertEquals("test-bucket", saved.getS3Bucket());
 					assertEquals(VideoStatus.STORED, saved.getStatus());
 					assertEquals("videos/%s/my_clip.mp4".formatted(saved.getId()), saved.getS3Key());
@@ -98,7 +111,7 @@ class VideoServiceTest {
 		FilePart file = file("clip.mp4", MediaType.valueOf("video/mp4"));
 		doThrow(new InvalidVideoException("file part is required")).when(validator).validate(file);
 
-		InvalidVideoException ex = assertThrows(InvalidVideoException.class, () -> videoService.upload(file));
+		InvalidVideoException ex = assertThrows(InvalidVideoException.class, () -> videoService.upload(file, USER_ID));
 		assertEquals("file part is required", ex.getMessage());
 		verify(s3VideoStorage, never()).put(anyString(), anyString(), any());
 	}
@@ -106,10 +119,11 @@ class VideoServiceTest {
 	@Test
 	void uploadDoesNotPersistWhenUploadedSizeExceedsMax() {
 		FilePart file = file("clip.mp4", MediaType.valueOf("video/mp4"));
-		when(s3VideoStorage.put(anyString(), eq("video/mp4"), any())).thenReturn(Mono.just(2048L));
+		when(s3VideoStorage.put(anyString(), eq("video/mp4"), any()))
+				.thenReturn(Mono.just(new StoredObject(2048L, "cd".repeat(32))));
 		doThrow(new InvalidVideoException("file exceeds max size of 1024 bytes")).when(maxSizeGuard).check(2048L);
 
-		StepVerifier.create(videoService.upload(file))
+		StepVerifier.create(videoService.upload(file, USER_ID))
 				.expectErrorSatisfies(error -> {
 					assertInstanceOf(InvalidVideoException.class, error);
 					assertEquals("file exceeds max size of 1024 bytes", error.getMessage());
@@ -121,12 +135,15 @@ class VideoServiceTest {
 	}
 
 	@Test
-	void getByIdReturnsVideo() {
+	void getByIdReturnsOwnedVideoAfterCustodyCheck() {
 		UUID id = UUID.randomUUID();
 		Video video = video(id);
 		when(videoRepository.findById(id)).thenReturn(Mono.just(video));
+		when(chainOfCustody.verify(id)).thenReturn(Mono.empty());
+		when(chainOfCustody.record(eq(id), eq(USER_ID), eq(ChainOfCustodyService.ACTION_ACCESS), eq(video.getContentSha256())))
+				.thenReturn(Mono.just(CustodyEvent.builder().build()));
 
-		StepVerifier.create(videoService.getById(id))
+		StepVerifier.create(videoService.getById(id, USER_ID))
 				.expectNext(video)
 				.verifyComplete();
 	}
@@ -136,11 +153,23 @@ class VideoServiceTest {
 		UUID id = UUID.randomUUID();
 		when(videoRepository.findById(id)).thenReturn(Mono.empty());
 
-		StepVerifier.create(videoService.getById(id))
+		StepVerifier.create(videoService.getById(id, USER_ID))
 				.expectErrorSatisfies(error -> {
 					assertInstanceOf(VideoNotFoundException.class, error);
 					assertEquals("Video not found: " + id, error.getMessage());
 				})
+				.verify();
+	}
+
+	@Test
+	void getByIdFailsWhenOwnedBySomeoneElse() {
+		UUID id = UUID.randomUUID();
+		Video video = video(id);
+		video.setUserId(UUID.randomUUID());
+		when(videoRepository.findById(id)).thenReturn(Mono.just(video));
+
+		StepVerifier.create(videoService.getById(id, USER_ID))
+				.expectError(VideoAccessDeniedException.class)
 				.verify();
 	}
 
@@ -155,9 +184,12 @@ class VideoServiceTest {
 				.confidence(0.9)
 				.build();
 		when(videoRepository.findById(id)).thenReturn(Mono.just(video));
+		when(chainOfCustody.verify(id)).thenReturn(Mono.empty());
+		when(chainOfCustody.record(eq(id), eq(USER_ID), eq(ChainOfCustodyService.ACTION_ACCESS), any()))
+				.thenReturn(Mono.just(CustodyEvent.builder().build()));
 		when(detectionRepository.findByVideoId(id)).thenReturn(Flux.just(detection));
 
-		StepVerifier.create(videoService.getWithDetections(id))
+		StepVerifier.create(videoService.getWithDetections(id, USER_ID))
 				.assertNext(result -> {
 					assertEquals(video, result.video());
 					assertEquals(1, result.detections().size());
@@ -171,7 +203,7 @@ class VideoServiceTest {
 		UUID id = UUID.randomUUID();
 		when(videoRepository.findById(id)).thenReturn(Mono.empty());
 
-		StepVerifier.create(videoService.getWithDetections(id))
+		StepVerifier.create(videoService.getWithDetections(id, USER_ID))
 				.expectError(VideoNotFoundException.class)
 				.verify();
 
@@ -201,9 +233,11 @@ class VideoServiceTest {
 		Instant now = Instant.parse("2026-01-01T00:00:00Z");
 		return Video.builder()
 				.id(id)
+				.userId(USER_ID)
 				.originalFilename("clip.mp4")
 				.contentType("video/mp4")
 				.sizeBytes(512)
+				.contentSha256("ab".repeat(32))
 				.s3Bucket("test-bucket")
 				.s3Key("videos/%s/clip.mp4".formatted(id))
 				.status(VideoStatus.STORED)

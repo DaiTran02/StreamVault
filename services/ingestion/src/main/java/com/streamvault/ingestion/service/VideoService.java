@@ -2,14 +2,17 @@ package com.streamvault.ingestion.service;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.stereotype.Service;
 
+import com.streamvault.ingestion.entity.CustodyEvent;
 import com.streamvault.ingestion.entity.Detection;
 import com.streamvault.ingestion.entity.Video;
 import com.streamvault.ingestion.entity.VideoStatus;
+import com.streamvault.ingestion.exception.VideoAccessDeniedException;
 import com.streamvault.ingestion.exception.VideoNotFoundException;
 import com.streamvault.ingestion.kafka.VideoUploadedEvent;
 import com.streamvault.ingestion.kafka.VideoUploadedPublisher;
@@ -28,6 +31,7 @@ public class VideoService {
 	private final DetectionRepository detectionRepository;
 	private final VideoUploadedPublisher publisher;
 	private final IngestionMaxSizeGuard maxSizeGuard;
+	private final ChainOfCustodyService chainOfCustody;
 
 	public VideoService(
 			VideoUploadValidator validator,
@@ -35,16 +39,18 @@ public class VideoService {
 			VideoRepository videoRepository,
 			DetectionRepository detectionRepository,
 			VideoUploadedPublisher publisher,
-			IngestionMaxSizeGuard maxSizeGuard) {
+			IngestionMaxSizeGuard maxSizeGuard,
+			ChainOfCustodyService chainOfCustody) {
 		this.validator = validator;
 		this.s3VideoStorage = s3VideoStorage;
 		this.videoRepository = videoRepository;
 		this.detectionRepository = detectionRepository;
 		this.publisher = publisher;
 		this.maxSizeGuard = maxSizeGuard;
+		this.chainOfCustody = chainOfCustody;
 	}
 
-	public Mono<Video> upload(FilePart file) {
+	public Mono<Video> upload(FilePart file, UUID userId) {
 		validator.validate(file);
 		UUID id = UUID.randomUUID();
 		String filename = sanitizeFilename(file.filename());
@@ -53,20 +59,26 @@ public class VideoService {
 		Instant now = Instant.now();
 
 		return s3VideoStorage.put(key, contentType, file)
-				.flatMap(sizeBytes -> {
-					maxSizeGuard.check(sizeBytes);
+				.flatMap(stored -> {
+					maxSizeGuard.check(stored.sizeBytes());
 					Video video = Video.builder()
 							.id(id)
+							.userId(userId)
 							.originalFilename(file.filename())
 							.contentType(contentType)
-							.sizeBytes(sizeBytes)
+							.sizeBytes(stored.sizeBytes())
+							.contentSha256(stored.sha256Hex())
 							.s3Bucket(s3VideoStorage.bucket())
 							.s3Key(key)
 							.status(VideoStatus.STORED)
 							.createdAt(now)
 							.updatedAt(now)
 							.build();
-					return videoRepository.save(video);
+					return videoRepository.save(video)
+							.flatMap(saved -> chainOfCustody
+									.record(saved.getId(), userId, ChainOfCustodyService.ACTION_INGEST,
+											saved.getContentSha256())
+									.thenReturn(saved));
 				})
 				.flatMap(saved -> publisher
 						.publish(new VideoUploadedEvent(
@@ -77,16 +89,35 @@ public class VideoService {
 						.thenReturn(saved));
 	}
 
-	public Mono<Video> getById(UUID id) {
-		return videoRepository.findById(id)
-				.switchIfEmpty(Mono.error(new VideoNotFoundException(id)));
+	public Mono<Video> getById(UUID id, UUID userId) {
+		return loadOwned(id, userId)
+				.flatMap(video -> chainOfCustody.verify(id)
+						.then(chainOfCustody.record(id, userId, ChainOfCustodyService.ACTION_ACCESS,
+								video.getContentSha256()))
+						.thenReturn(video));
 	}
 
-	public Mono<VideoWithDetections> getWithDetections(UUID id) {
-		return getById(id)
+	public Mono<VideoWithDetections> getWithDetections(UUID id, UUID userId) {
+		return getById(id, userId)
 				.flatMap(video -> detectionRepository.findByVideoId(id)
 						.collectList()
 						.map(detections -> new VideoWithDetections(video, detections)));
+	}
+
+	public Mono<List<CustodyEvent>> getCustody(UUID id, UUID userId) {
+		return loadOwned(id, userId)
+				.flatMap(video -> chainOfCustody.verify(id).then(chainOfCustody.list(id)));
+	}
+
+	private Mono<Video> loadOwned(UUID id, UUID userId) {
+		return videoRepository.findById(id)
+				.switchIfEmpty(Mono.error(new VideoNotFoundException(id)))
+				.flatMap(video -> {
+					if (!Objects.equals(userId, video.getUserId())) {
+						return Mono.error(new VideoAccessDeniedException());
+					}
+					return Mono.just(video);
+				});
 	}
 
 	static String sanitizeFilename(String filename) {
