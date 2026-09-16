@@ -1,0 +1,25 @@
+spring:
+  application:
+    name: auth-service
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/streamvault}
+    username: ${SPRING_DATASOURCE_USERNAME:streamvault}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+  flyway:
+    enabled: true
+    table: flyway_auth_history
+    baseline-on-migrate: true
+    baseline-version: 0
+    url: ${SPRING_FLYWAY_URL:${spring.datasource.url}}
+    user: ${SPRING_DATASOURCE_USERNAME:${spring.datasource.username}}
+    password: ${SPRING_DATASOURCE_PASSWORD:${spring.datasource.password:}}
+
+server:
+  port: ${SERVER_PORT:9002}
+
+auth:
+  issuer: ${OAUTH2_ISSUER:http://localhost:9002}
+  access-token-ttl: ${AUTH_ACCESS_TOKEN_TTL:1h}
+  refresh-token-ttl: ${AUTH_REFRESH_TOKEN_TTL:7d}
+  client-id: ${OAUTH2_CLIENT_ID:streamvault-client}
+  client-secret: ${OAUTH2_CLIENT_SECRET:streamvault-secret}

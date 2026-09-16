@@ -1,0 +1,16 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:auth;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;INIT=CREATE DOMAIN IF NOT EXISTS TIMESTAMPTZ AS TIMESTAMP
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  flyway:
+    enabled: true
+    table: flyway_auth_history
+
+auth:
+  issuer: http://localhost:9002
+  access-token-ttl: 1h
+  refresh-token-ttl: 7d
+  client-id: streamvault-client
+  client-secret: streamvault-secret

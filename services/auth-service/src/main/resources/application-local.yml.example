@@ -1,0 +1,19 @@
+# Copy to application-local.yml and edit. That file is gitignored.
+# ./mvnw spring-boot:run activates the local profile automatically.
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/streamvault
+    username: streamvault
+    password: streamvault
+  flyway:
+    url: jdbc:postgresql://localhost:5432/streamvault
+    user: streamvault
+    password: streamvault
+    baseline-on-migrate: true
+    baseline-version: 0
+
+auth:
+  issuer: http://localhost:9002
+  client-id: streamvault-client
+  client-secret: streamvault-secret
