@@ -1,4 +1,4 @@
-package com.streamvault.ingestion.api;
+package com.streamvault.ingestion.dto;
 
 import java.util.List;
 
