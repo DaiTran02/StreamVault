@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import time
 import uuid
 from typing import Iterable
 
@@ -84,3 +86,51 @@ class Database:
         with psycopg.connect(self._url, row_factory=dict_row) as conn:
             row = conn.execute("SELECT 1 FROM videos WHERE id = %s", (video_id,)).fetchone()
             return row is not None
+
+    def append_custody(self, video_id: str, action: str) -> None:
+        with psycopg.connect(self._url, row_factory=dict_row) as conn:
+            video = conn.execute(
+                "SELECT user_id, content_sha256 FROM videos WHERE id = %s",
+                (video_id,),
+            ).fetchone()
+            if video is None or not video["content_sha256"]:
+                return
+            previous = conn.execute(
+                """
+                SELECT chain_hash
+                FROM custody_events
+                WHERE video_id = %s
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (video_id,),
+            ).fetchone()
+            previous_hash = previous["chain_hash"] if previous else ("0" * 64)
+            user_id = video["user_id"]
+            content_sha256 = video["content_sha256"]
+            millis = time.time_ns() // 1_000_000
+            user = "" if user_id is None else str(user_id)
+            canonical = f"{previous_hash}|{video_id}|{user}|{action}|{content_sha256}|{millis}"
+            chain_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            conn.execute(
+                """
+                INSERT INTO custody_events (
+                    id, video_id, user_id, action, content_sha256,
+                    previous_chain_hash, chain_hash, created_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s,
+                    TIMESTAMPTZ 'epoch' + (%s) * INTERVAL '1 millisecond'
+                )
+                """,
+                (
+                    str(uuid.uuid4()),
+                    video_id,
+                    str(user_id) if user_id is not None else None,
+                    action,
+                    content_sha256,
+                    previous_hash,
+                    chain_hash,
+                    millis,
+                ),
+            )
+            conn.commit()

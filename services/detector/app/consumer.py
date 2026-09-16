@@ -80,6 +80,7 @@ class VideoUploadedConsumer:
                 self._s3.download(bucket, key, Path(tmp.name))
                 detections = self._detector.detect(tmp.name, self._settings.sample_fps)
                 self._db.insert_detections(video_id, detections)
+                self._db.append_custody(video_id, "DETECTED")
             self._db.mark_completed(video_id)
             log.info("completed video %s detections=%s", video_id, len(detections))
         except Exception:
