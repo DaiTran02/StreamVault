@@ -3,6 +3,7 @@ import { check, sleep } from 'k6';
 import { FormData } from 'https://jslib.k6.io/formdata/0.0.2/index.js';
 
 const baseUrl = __ENV.BASE_URL || 'http://localhost:8080';
+const accessToken = __ENV.ACCESS_TOKEN || '';
 const targetVus = Number(__ENV.TARGET_VUS || '100');
 const video = open(__ENV.VIDEO_PATH || 'tests/fixtures/sample.mp4', 'b');
 
@@ -29,7 +30,10 @@ export default function () {
   form.append('file', http.file(video, 'sample.mp4', 'video/mp4'));
 
   const res = http.post(`${baseUrl}/api/v1/videos`, form.body(), {
-    headers: { 'Content-Type': `multipart/form-data; boundary=${form.boundary}` },
+    headers: {
+      'Content-Type': `multipart/form-data; boundary=${form.boundary}`,
+      Authorization: `Bearer ${accessToken}`,
+    },
     timeout: '120s',
   });
 
@@ -37,14 +41,14 @@ export default function () {
     'created (201)': (r) => r.status === 201,
     'has video id': (r) => {
       try {
-        return typeof r.json('id') === 'string';
+        return typeof r.json('data.id') === 'string';
       } catch (e) {
         return false;
       }
     },
     'sizeBytes > 0': (r) => {
       try {
-        return r.json('sizeBytes') > 0;
+        return r.json('data.sizeBytes') > 0;
       } catch (e) {
         return false;
       }

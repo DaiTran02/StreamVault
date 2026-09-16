@@ -1,10 +1,10 @@
 # StreamVault
 
-Upload a video, store the object in S3, persist metadata in Postgres, publish a Kafka event, then detect people and faces.
+Register and log in through auth-service to get an OAuth2 access token. Upload a video with that token; ingestion stores the object in S3, binds it to the user, starts a SHA-256 chain of custody, publishes a Kafka event, then the detector records people and faces and extends the chain.
 
 ```
-Client → Ingestion (Spring WebFlux) → S3 + Postgres + Kafka
-                                    → Detector (Python) → detections in Postgres
+Client → Auth (OAuth2 JWT) → Ingestion (Spring WebFlux) → S3 + Postgres + Kafka
+                                                      → Detector (Python) → detections + custody in Postgres
 ```
 
 ## AWS resources
@@ -35,6 +35,14 @@ Shared:
 | `KAFKA_SECURITY_PROTOCOL` | Optional (`SASL_SSL`, `SSL`, …) |
 | `KAFKA_SASL_MECHANISM` | Optional (`SCRAM-SHA-512`, `PLAIN`, …) |
 
+Auth-service (Java, port 9002):
+
+| Variable | Purpose |
+| --- | --- |
+| `SPRING_DATASOURCE_URL` | JDBC URL (same Postgres as ingestion) |
+| `OAUTH2_ISSUER` | JWT issuer (default `http://localhost:9002`) |
+| `OAUTH2_CLIENT_ID` / `OAUTH2_CLIENT_SECRET` | Confidential OAuth2 client |
+
 Ingestion (Java):
 
 | Variable | Purpose |
@@ -46,6 +54,7 @@ Ingestion (Java):
 | `SPRING_DATASOURCE_PASSWORD` | DB password |
 | `KAFKA_SASL_JAAS_CONFIG` | Optional JAAS for the Java producer |
 | `INGESTION_MAX_FILE_SIZE_BYTES` | Max upload size (default 5 GiB) |
+| `OAUTH2_JWK_SET_URI` | Auth-service JWKS URL (default `http://localhost:9002/oauth2/jwks`) |
 
 Detector (Python):
 
@@ -57,7 +66,13 @@ Detector (Python):
 | `DETECTOR_SAMPLE_FPS` | Frames sampled per second (default `1`) |
 | `DETECTOR_YOLO_MODEL` | Ultralytics weights (default `yolov8n.pt`) |
 
-Flyway runs on ingestion startup and creates `videos` and `detections`.
+Flyway on auth-service creates `users` and `refresh_tokens`. Ingestion Flyway creates `videos`, `detections`, and `custody_events`, and links videos to users.
+
+Each video has `user_id` (owner) and `content_sha256` (SHA-256 of the file bytes). Detections belong to a video, so they inherit that user relationship. Every ingest, detection, and authenticated read appends a custody event whose `chain_hash` is:
+
+`SHA-256(previous_chain_hash | videoId | userId | action | content_sha256 | epochMillis)`
+
+Reads fail with 409 if the chain does not recompute.
 
 ## Local infrastructure
 
@@ -75,6 +90,36 @@ docker compose up -d
 
 Stop with `docker compose down`. Add `-v` to also delete data volumes.
 
+## Run auth-service
+
+Java 21 JDK (not a JRE) and Maven. Auth listens on port `9002` and issues JWTs signed with an in-memory RSA key (tokens are invalid after restart).
+
+If `mvn` reports `release version 21 not supported`, it is running on a JRE (Ubuntu often defaults to a newer JRE). Point it at JDK 21:
+
+```bash
+export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+export PATH="$JAVA_HOME/bin:$PATH"
+```
+
+```bash
+cd services/auth-service
+cp src/main/resources/application-local.yml.example src/main/resources/application-local.yml
+./mvnw spring-boot:run
+```
+
+```bash
+curl -sS -X POST http://localhost:9002/api/v1/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"alice","password":"password1"}'
+
+# later
+curl -sS -X POST http://localhost:9002/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"alice","password":"password1"}'
+```
+
+`/api/v1` responses use a shared envelope: `{ "status": 200, "service": "auth-service", "message": "success", "data": { ... } }`. Tokens are in `data` (`access_token`, `token_type`, `expires_in`, `refresh_token`, `scope`). JWKS is at `http://localhost:9002/oauth2/jwks`. Authorization-code and client-credentials grants stay on the standard `/oauth2/token` endpoint (`client_id` `streamvault-client`, secret `streamvault-secret`) and are not wrapped.
+
 ## Run ingestion
 
 Java 21 and Maven wrapper. For local, put values in YAML instead of exporting env vars:
@@ -89,15 +134,17 @@ cp src/main/resources/application-local.yml.example src/main/resources/applicati
 
 Production/staging still use the env vars in the table above (or set `SPRING_PROFILES_ACTIVE` so `local` is not applied).
 
-Upload and poll:
+Upload and poll (replace `$TOKEN` with `access_token` from login):
 
 ```bash
 curl -sS -X POST http://localhost:8080/api/v1/videos \
+  -H "Authorization: Bearer $TOKEN" \
   -F "file=@sample.mp4;type=video/mp4"
 
-# response includes id
-curl -sS http://localhost:8080/api/v1/videos/{id}
-curl -sS http://localhost:8080/api/v1/videos/{id}/detections
+# envelope data includes id, userId, contentSha256
+curl -sS -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/videos/{id}
+curl -sS -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/videos/{id}/detections
+curl -sS -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/videos/{id}/custody
 ```
 
 Allowed types: `video/mp4`, `video/quicktime`, `video/webm`.

@@ -21,6 +21,11 @@ spring:
       max-in-memory-size: 256KB
       max-disk-usage-per-part: ${INGESTION_MAX_FILE_SIZE_BYTES:5368709120}
       max-headers-size: 16KB
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          jwk-set-uri: ${OAUTH2_JWK_SET_URI:http://localhost:9002/oauth2/jwks}
 
 aws:
   region: ${AWS_REGION:ap-southeast-3}

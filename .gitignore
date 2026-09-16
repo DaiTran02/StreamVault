@@ -1,0 +1,19 @@
+# Local secrets and env files
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Local Spring profile (copy from application-local.yml.example)
+**/application-local.yml
+
+# Cloud and machine credentials
+.aws/
+**/credentials
+*.pem
+*.p12
+*.jks
+id_rsa
+id_ed25519

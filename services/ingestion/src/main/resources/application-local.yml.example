@@ -16,6 +16,11 @@ spring:
     url: jdbc:postgresql://localhost:5432/streamvault
     user: streamvault
     password: streamvault
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          jwk-set-uri: http://localhost:9002/oauth2/jwks
 
 aws:
   region: us-east-1
